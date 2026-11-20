@@ -1,0 +1,201 @@
+@import "tailwindcss";
+
+:root {
+  --bmw-accent: #0ea5e9;
+  --bmw-accent-2: #2563eb;
+  --bmw-accent-text: #7dd3fc;
+  --bmw-accent-btn-text: #ffffff;
+  --bmw-accent-soft: rgba(14, 165, 233, 0.14);
+  --bmw-accent-border: rgba(14, 165, 233, 0.45);
+  --bmw-accent-glow: rgba(14, 165, 233, 0.35);
+}
+
+@layer base {
+  html,
+  body {
+    font-family: "Vazirmatn", "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+    background-color: #05070b;
+    color: #f1f5f9;
+  }
+
+  .font-mono {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  #car-headunit-app {
+    zoom: var(--headunit-scale, 1);
+  }
+}
+
+@layer utilities {
+  .cockpit-canvas {
+    background-color: #05070b;
+    background-image:
+      radial-gradient(62% 38% at 50% 0%, var(--bmw-accent-soft) 0%, transparent 72%),
+      radial-gradient(40% 30% at 88% 12%, rgba(30, 58, 138, 0.14) 0%, transparent 70%),
+      linear-gradient(180deg, #060910 0%, #05070b 45%, #040509 100%);
+  }
+
+  .cockpit-panel {
+    background: linear-gradient(180deg, rgba(16, 20, 30, 0.92) 0%, rgba(9, 12, 19, 0.96) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 14px 32px -12px rgba(0, 0, 0, 0.72);
+    backdrop-filter: blur(14px);
+  }
+
+  .cockpit-panel-accent {
+    background: linear-gradient(180deg, rgba(17, 23, 35, 0.94) 0%, rgba(9, 13, 21, 0.97) 100%);
+    border: 1px solid var(--bmw-accent-border);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.09),
+      0 14px 36px -14px var(--bmw-accent-glow);
+    backdrop-filter: blur(14px);
+  }
+
+  .instrument-well {
+    background: rgba(6, 9, 14, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.65);
+  }
+
+  .hardware-key {
+    background: linear-gradient(180deg, rgba(22, 27, 38, 0.95) 0%, rgba(11, 14, 21, 0.98) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.07),
+      0 6px 16px -6px rgba(0, 0, 0, 0.75);
+    transition:
+      transform 160ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 160ms ease,
+      filter 160ms ease;
+  }
+
+  .hardware-key:hover {
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+
+  .bmw-accent-btn {
+    background-image: linear-gradient(135deg, var(--bmw-accent), var(--bmw-accent-2));
+    color: var(--bmw-accent-btn-text);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      0 8px 22px -6px var(--bmw-accent-glow);
+  }
+
+  .bmw-accent-surface {
+    background-color: var(--bmw-accent-soft);
+    border-color: var(--bmw-accent-border);
+    color: var(--bmw-accent-text);
+  }
+
+  .bmw-accent-border {
+    border-color: var(--bmw-accent-border);
+  }
+
+  .bmw-accent-text {
+    color: var(--bmw-accent-text);
+  }
+
+  .bmw-accent-fill {
+    background-color: var(--bmw-accent);
+  }
+
+  .bmw-ambient-strip {
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--bmw-accent) 25%,
+      var(--bmw-accent-2) 75%,
+      transparent 100%
+    );
+    box-shadow: 0 0 16px var(--bmw-accent-glow);
+  }
+
+  @keyframes spinSlow {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .animate-spin-slow {
+    animation: spinSlow 12s linear infinite;
+  }
+
+  /* Hide scrollbar for clean car UI */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* Official Google Sign-In Button Styling */
+  .gsi-material-button {
+    -moz-user-select: none;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    background-color: #ffffff;
+    background-image: none;
+    border: 1px solid #747775;
+    border-radius: 12px;
+    box-sizing: border-box;
+    color: #1f1f1f;
+    cursor: pointer;
+    font-family: "Plus Jakarta Sans", "Vazirmatn", system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    height: 40px;
+    letter-spacing: 0.25px;
+    outline: none;
+    overflow: hidden;
+    padding: 0 14px;
+    position: relative;
+    text-align: center;
+    transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s;
+    vertical-align: middle;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .gsi-material-button:hover {
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    background-color: #f8fafc;
+  }
+
+  .gsi-material-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .gsi-material-button-content-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 100%;
+    position: relative;
+  }
+
+  .gsi-material-button-icon {
+    height: 18px;
+    width: 18px;
+    min-width: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin,
+  .animate-spin-slow,
+  .animate-pulse,
+  .animate-ping {
+    animation: none !important;
+  }
+}
