@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ShieldAlert,
   KeyRound,
@@ -26,14 +26,21 @@ import {
   CloudDownload,
   Trash2,
   ExternalLink,
+  Copy,
+  Terminal,
+  Wand2,
 } from "lucide-react";
 import { carAudio } from "../utils/carSpeech";
 import { CarState, PreConditioningSchedule, RecordedSession } from "../types";
 import {
   BmwSyncPayload,
+  DEFAULT_GITHUB_COMMIT_URL,
+  DEFAULT_GITHUB_REPO_URL,
   GitHubSyncConfig,
+  autoMatchAndEnsureGitHubRepo,
   clearGitHubToken,
   loadGitHubConfig,
+  pushProjectSourceToGitHub,
   restoreStateFromGitHub,
   saveGitHubConfig,
   syncStateToGitHub,
@@ -45,6 +52,12 @@ import {
   loadSavedHeadunitProfile,
   runMonitorAutoResetAndMatch,
 } from "../utils/headunitAutoSync";
+import {
+  APP_BUILD_VERSION,
+  HeadunitOtaStatus,
+  loadSavedOtaStatus,
+  runHeadunitAutoUpdateAndResourceSync,
+} from "../utils/headunitUpdater";
 
 interface FactorySettingsModalProps {
   isOpen: boolean;
@@ -61,6 +74,7 @@ interface FactorySettingsModalProps {
   preConditionSchedule?: PreConditioningSchedule;
   onRestoreGitHubSnapshot?: (payload: BmwSyncPayload) => void;
   onMonitorCalibrated?: (profile: HeadunitMonitorProfile) => void;
+  initialSubTab?: "canbus" | "audio" | "display" | "logo" | "github" | "reset";
 }
 
 export default function FactorySettingsModal({
@@ -78,22 +92,31 @@ export default function FactorySettingsModal({
   preConditionSchedule,
   onRestoreGitHubSnapshot,
   onMonitorCalibrated,
+  initialSubTab,
 }: FactorySettingsModalProps) {
   const [pinInput, setPinInput] = useState<string>("");
   const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
   const [pinError, setPinError] = useState<string | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<
     "canbus" | "audio" | "display" | "logo" | "github" | "reset"
-  >("canbus");
+  >(initialSubTab || "canbus");
+
+  useEffect(() => {
+    if (isOpen && initialSubTab) {
+      setActiveSubTab(initialSubTab);
+    }
+  }, [isOpen, initialSubTab]);
 
   // GitHub Sync State
   const [ghConfig, setGhConfig] = useState<GitHubSyncConfig>(() => loadGitHubConfig());
   const [showGhToken, setShowGhToken] = useState<boolean>(false);
-  const [ghBusy, setGhBusy] = useState<"verify" | "sync" | "restore" | null>(null);
+  const [ghBusy, setGhBusy] = useState<"verify" | "automatch" | "sync" | "restore" | "pushcode" | null>(null);
+  const [copiedGitCmd, setCopiedGitCmd] = useState<boolean>(false);
   const [ghStatus, setGhStatus] = useState<{
     type: "success" | "error" | "info";
     text: string;
     commitUrl?: string;
+    pagesUrl?: string;
   } | null>(null);
 
   // Factory configured parameters (Auto-tuned specifically for BMW 728Li + iDrive Android Widescreen)
@@ -134,6 +157,20 @@ export default function FactorySettingsModal({
   const [resetSuccess, setResetSuccess] = useState<boolean>(false);
   const [isAutoTuning, setIsAutoTuning] = useState<boolean>(false);
   const [autoTunedNotice, setAutoTunedNotice] = useState<string | null>(null);
+  const [otaStatus, setOtaStatus] = useState<HeadunitOtaStatus>(() => loadSavedOtaStatus());
+  const [isOtaSyncing, setIsOtaSyncing] = useState<boolean>(false);
+
+  const handleRunOtaUpdateNow = async () => {
+    carAudio.playButtonTap();
+    setIsOtaSyncing(true);
+    try {
+      const next = await runHeadunitAutoUpdateAndResourceSync({ silent: false });
+      setOtaStatus(next);
+      carAudio.playBmwGong();
+    } finally {
+      setIsOtaSyncing(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -244,6 +281,35 @@ export default function FactorySettingsModal({
     });
   };
 
+  const handleAutoMatchGitHub = async () => {
+    carAudio.playButtonTap();
+    setGhBusy("automatch");
+    setGhStatus(null);
+    const res = await autoMatchAndEnsureGitHubRepo(ghConfig);
+    setGhBusy(null);
+    if (res.ok) {
+      carAudio.playLockBeep(true);
+      updateGhField({
+        owner: res.owner || ghConfig.owner,
+        repo: res.repo || ghConfig.repo,
+        branch: res.branch || ghConfig.branch || "main",
+      });
+      setGhStatus({
+        type: "success",
+        text: res.message,
+        commitUrl: res.repoUrl,
+      });
+    } else {
+      if (res.owner) {
+        updateGhField({ owner: res.owner });
+      }
+      setGhStatus({
+        type: "error",
+        text: res.message,
+      });
+    }
+  };
+
   const handleVerifyGitHub = async () => {
     carAudio.playButtonTap();
     setGhBusy("verify");
@@ -308,6 +374,32 @@ export default function FactorySettingsModal({
       setGhStatus({
         type: "success",
         text: `${res.message} (${res.payload.diagnosticLogs?.length ?? 0} لاگ دیاگ)`,
+      });
+    } else {
+      setGhStatus({
+        type: "error",
+        text: res.message,
+      });
+    }
+  };
+
+  const handlePushProjectToGitHub = async () => {
+    carAudio.playButtonTap();
+    setGhBusy("pushcode");
+    setGhStatus(null);
+    const res = await pushProjectSourceToGitHub(ghConfig);
+    setGhBusy(null);
+    if (res.success) {
+      carAudio.playBmwGong();
+      updateGhField({
+        lastSyncAt: new Date().toLocaleString("fa-IR"),
+        lastCommitUrl: res.commitUrl,
+      });
+      setGhStatus({
+        type: "success",
+        text: res.message,
+        commitUrl: res.commitUrl,
+        pagesUrl: res.pagesUrl,
       });
     } else {
       setGhStatus({
@@ -427,15 +519,23 @@ export default function FactorySettingsModal({
 
             {/* Quick 1-Click Unlock with 8888 */}
             <button
+              id="factory-quick-unlock-8888"
               onClick={() => {
                 setPinInput("8888");
                 setIsUnlocked(true);
+                if (initialSubTab) {
+                  setActiveSubTab(initialSubTab);
+                }
                 carAudio.playLockBeep(true);
               }}
-              className="text-xs text-cyan-400 hover:text-cyan-300 underline font-mono flex items-center gap-1.5"
+              className="px-4 py-2 rounded-xl bg-cyan-500/15 border border-cyan-400/50 text-xs text-cyan-300 hover:bg-cyan-500/25 font-bold flex items-center gap-1.5 transition"
             >
               <Unlock className="w-3.5 h-3.5" />
-              <span>ورود مستقیم با رمز ۸۸۸۸</span>
+              <span>
+                {activeSubTab === "github"
+                  ? "ورود مستقیم با رمز ۸۸۸۸ (ورود به بخش گیت‌هاب)"
+                  : "ورود مستقیم با رمز ۸۸۸۸"}
+              </span>
             </button>
           </div>
         ) : (
@@ -567,6 +667,55 @@ export default function FactorySettingsModal({
                     </div>
                   </div>
                 </div>
+
+                {/* Headunit OTA Auto-Update & Required Package Pre-Downloader */}
+                <div className="bg-slate-950 p-3.5 rounded-xl border border-amber-500/35 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <CloudDownload className="w-4 h-4 text-amber-400" />
+                      <span className="text-xs font-bold text-amber-200">
+                        بروزرسانی خودکار مانیتور و دانلود بسته‌های ضروری (OTA)
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-mono text-emerald-300 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-lg">
+                      نسخه فعلی: v{APP_BUILD_VERSION}
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    هنگام اتصال مانیتور خودرو به اینترنت، نسخه جدید برنامه، ماژول‌های آفلاین، آیکون‌ها و تنظیمات کالیبراسیون به‌طور خودکار دانلود و روی حافظه مانیتور ذخیره می‌شوند.
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                    <div className="bg-slate-900 p-2 rounded-lg border border-slate-800 flex justify-between">
+                      <span className="text-slate-400">آخرین همگام‌سازی:</span>
+                      <span className="text-amber-300 font-mono">{otaStatus.lastSyncedAt}</span>
+                    </div>
+                    <div className="bg-slate-900 p-2 rounded-lg border border-slate-800 flex justify-between">
+                      <span className="text-slate-400">بسته‌های کش‌شده آفلاین:</span>
+                      <span className="text-emerald-300 font-mono">{otaStatus.cachedAssetsCount} بسته</span>
+                    </div>
+                  </div>
+
+                  <div className="text-[11px] text-amber-100/90 bg-amber-950/35 border border-amber-500/25 rounded-lg px-2.5 py-1.5">
+                    {otaStatus.summaryFa}
+                  </div>
+
+                  <button
+                    id="ota-check-download-btn"
+                    type="button"
+                    onClick={handleRunOtaUpdateNow}
+                    disabled={isOtaSyncing}
+                    className="w-full py-2.5 px-3 rounded-xl bg-amber-600/80 hover:bg-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition active:scale-95 disabled:opacity-60"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isOtaSyncing ? "animate-spin" : ""}`} />
+                    <span>
+                      {isOtaSyncing
+                        ? "در حال بررسی آپدیت و دانلود بسته‌های ضروری..."
+                        : "بررسی آپدیت مانیتور و دانلود بسته‌های مورد نیاز"}
+                    </span>
+                  </button>
+                </div>
               </div>
             )}
 
@@ -623,32 +772,48 @@ export default function FactorySettingsModal({
                   </div>
 
                   {/* Personal Access Token Input */}
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between">
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <label htmlFor="github-pat-input" className="text-xs font-bold text-slate-200">
                         توکن دسترسی شخصی گیت‌هاب (Personal Access Token)
                       </label>
-                      {ghConfig.token && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            carAudio.playButtonTap();
-                            setGhConfig(clearGitHubToken());
-                            setGhStatus({ type: "info", text: "توکن ذخیره شده از حافظه مرورگر پاک شد." });
-                          }}
-                          className="text-[10px] text-rose-400 hover:text-rose-300 flex items-center gap-1"
+                      <div className="flex items-center gap-2.5">
+                        <a
+                          href="https://github.com/settings/tokens/new?scopes=repo,workflow&description=BMW-728Li-iDrive-Cockpit"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[11px] font-bold text-cyan-300 hover:text-cyan-200 bg-cyan-950/70 border border-cyan-500/40 px-2 py-0.5 rounded-lg inline-flex items-center gap-1"
                         >
-                          <Trash2 className="w-3 h-3" />
-                          <span>حذف توکن</span>
-                        </button>
-                      )}
+                          <ExternalLink className="w-3 h-3" />
+                          <span>ساخت توکن آماده در گیت‌هاب</span>
+                        </a>
+                        {ghConfig.token && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              carAudio.playButtonTap();
+                              setGhConfig(clearGitHubToken());
+                              setGhStatus({ type: "info", text: "توکن ذخیره شده از حافظه مرورگر پاک شد." });
+                            }}
+                            className="text-[10px] text-rose-400 hover:text-rose-300 flex items-center gap-1"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>حذف توکن</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <input
                         id="github-pat-input"
                         type={showGhToken ? "text" : "password"}
                         value={ghConfig.token}
-                        onChange={(e) => updateGhField({ token: e.target.value })}
+                        onChange={(e) => {
+                          const cleaned = e.target.value
+                            .replace(/^(Bearer|token)\s+/i, "")
+                            .replace(/\s+/g, "");
+                          updateGhField({ token: cleaned });
+                        }}
                         placeholder="github_pat_... یا ghp_..."
                         dir="ltr"
                         autoComplete="off"
@@ -663,8 +828,16 @@ export default function FactorySettingsModal({
                         {showGhToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
-                    <p className="text-[10px] text-slate-500">
-                      پیشنهاد امنیتی: از Fine-grained PAT با دسترسی فقط <span className="font-mono text-slate-400">Contents: Read & Write</span> روی یک مخزن خصوصی استفاده کنید.
+                    {ghConfig.token.trim().length > 0 &&
+                      !/^(gh[opusr]_|github_pat_)/i.test(ghConfig.token.trim()) && (
+                        <p className="text-[11px] text-amber-300 bg-amber-950/50 border border-amber-500/40 rounded-lg px-2.5 py-1">
+                          توجه: توکن معتبر گیت‌هاب باید با <span className="font-mono" dir="ltr">ghp_</span> یا{" "}
+                          <span className="font-mono" dir="ltr">github_pat_</span> شروع شود (رمز ورود اکانت یا لینک را اینجا نزنید).
+                        </p>
+                      )}
+                    <p className="text-[10px] text-slate-400">
+                      اگر خطای Bad credentials گرفتید، روی <strong>«ساخت توکن آماده در گیت‌هاب»</strong> کلیک کنید، پایین صفحه دکمه سبز{" "}
+                      <strong>Generate token</strong> را بزنید، توکن جدید (<span className="font-mono" dir="ltr">ghp_...</span>) را کپی و اینجا پیست کنید.
                     </p>
                   </div>
 
@@ -731,8 +904,51 @@ export default function FactorySettingsModal({
                     </div>
                   </div>
 
+                  {/* Linked Repository Reference Pill */}
+                  <div className="bg-slate-900/80 border border-slate-800 rounded-xl px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <span className="text-slate-300">
+                      مخزن متصل پیش‌فرض:{" "}
+                      <strong className="font-mono text-cyan-300" dir="ltr">
+                        {ghConfig.owner || "mohtaghi6-lab"}/{ghConfig.repo || "bmw728li-idrive-cockpit"}
+                      </strong>
+                    </span>
+                    <div className="flex items-center gap-3 font-mono" dir="ltr">
+                      <a
+                        href={`https://github.com/${ghConfig.owner || "mohtaghi6-lab"}/${ghConfig.repo || "bmw728li-idrive-cockpit"}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sky-400 hover:underline inline-flex items-center gap-1"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>Repository</span>
+                      </a>
+                      <a
+                        href={DEFAULT_GITHUB_COMMIT_URL}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-emerald-400 hover:underline inline-flex items-center gap-1"
+                        title={DEFAULT_GITHUB_REPO_URL}
+                      >
+                        <GitBranch className="w-3 h-3" />
+                        <span>79113b0a</span>
+                      </a>
+                    </div>
+                  </div>
+
                   {/* Action Buttons */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    <button
+                      id="github-automatch-btn"
+                      type="button"
+                      onClick={handleAutoMatchGitHub}
+                      disabled={ghBusy !== null}
+                      className="py-2.5 px-3 rounded-xl bg-indigo-950/70 hover:bg-indigo-900/70 border border-indigo-400/50 text-indigo-200 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 disabled:opacity-50"
+                      title="تشخیص خودکار نام کاربری گیت‌هاب از روی توکن و ساخت یا اتصال خودکار مخزن"
+                    >
+                      <Wand2 className={`w-3.5 h-3.5 text-indigo-300 ${ghBusy === "automatch" ? "animate-spin" : ""}`} />
+                      <span>{ghBusy === "automatch" ? "در حال مچ کردن..." : "مچ خودکار اکانت و مخزن"}</span>
+                    </button>
+
                     <button
                       id="github-verify-btn"
                       type="button"
@@ -752,7 +968,7 @@ export default function FactorySettingsModal({
                       className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:brightness-110 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 shadow-md disabled:opacity-50"
                     >
                       <CloudUpload className={`w-4 h-4 ${ghBusy === "sync" ? "animate-bounce" : ""}`} />
-                      <span>{ghBusy === "sync" ? "در حال ذخیره..." : "همگام‌سازی و ذخیره"}</span>
+                      <span>{ghBusy === "sync" ? "در حال ذخیره..." : "همگام‌سازی و ذخیره دیاگ"}</span>
                     </button>
 
                     <button
@@ -766,6 +982,22 @@ export default function FactorySettingsModal({
                       <span>{ghBusy === "restore" ? "در حال بازیابی..." : "بازیابی از گیت‌هاب"}</span>
                     </button>
                   </div>
+
+                  {/* Direct 1-Click Source Push to GitHub Repo */}
+                  <button
+                    id="github-push-project-btn"
+                    type="button"
+                    onClick={handlePushProjectToGitHub}
+                    disabled={ghBusy !== null}
+                    className="w-full py-2.5 px-3 rounded-xl bg-emerald-950/70 hover:bg-emerald-900/70 border border-emerald-500/50 text-emerald-200 text-xs font-bold flex items-center justify-center gap-2 transition active:scale-95 disabled:opacity-50"
+                  >
+                    <GitBranch className={`w-4 h-4 text-emerald-400 ${ghBusy === "pushcode" ? "animate-spin" : ""}`} />
+                    <span>
+                      {ghBusy === "pushcode"
+                        ? "در حال آپلود تمام کدهای پروژه به گیت‌هاب..."
+                        : "ارسال مستقیم کل کدهای جدید برنامه به مخزن گیت‌هاب"}
+                    </span>
+                  </button>
 
                   {/* Result Status Banner */}
                   {ghStatus && (
@@ -787,20 +1019,101 @@ export default function FactorySettingsModal({
                         )}
                         <span>{ghStatus.text}</span>
                       </div>
-                      {(ghStatus.commitUrl || ghConfig.lastCommitUrl) && ghStatus.type === "success" && (
-                        <a
-                          href={ghStatus.commitUrl || ghConfig.lastCommitUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-[11px] font-mono text-cyan-300 hover:underline self-start"
-                          dir="ltr"
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                          <span>View Commit on GitHub</span>
-                        </a>
-                      )}
+                      {(ghStatus.commitUrl || ghConfig.lastCommitUrl || ghStatus.pagesUrl) &&
+                        ghStatus.type === "success" && (
+                          <div className="flex flex-wrap items-center gap-3 self-start" dir="ltr">
+                            {(ghStatus.commitUrl || ghConfig.lastCommitUrl) && (
+                              <a
+                                href={ghStatus.commitUrl || ghConfig.lastCommitUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 text-[11px] font-mono text-cyan-300 hover:underline"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                <span>View on GitHub</span>
+                              </a>
+                            )}
+                            {ghStatus.pagesUrl && (
+                              <a
+                                href={ghStatus.pagesUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 text-[11px] font-mono text-emerald-300 hover:underline"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                <span>Open Live App (Pages)</span>
+                              </a>
+                            )}
+                          </div>
+                        )}
                     </div>
                   )}
+
+                  {/* Step-by-Step GitHub Repo Creation, Code Paste & Auto-Build Guide */}
+                  {(() => {
+                    const targetOwner = ghConfig.owner.trim() || "YOUR_USERNAME";
+                    const targetRepo = ghConfig.repo.trim() || "bmw728li-idrive-cockpit";
+                    const targetBranch = ghConfig.branch.trim() || "main";
+                    const gitPushCommands = [
+                      "git init",
+                      "git add .",
+                      'git commit -m "Initial commit: BMW 728Li iDrive Cockpit"',
+                      `git branch -M ${targetBranch}`,
+                      `git remote add origin https://github.com/${targetOwner}/${targetRepo}.git`,
+                      `git push -u origin ${targetBranch}`,
+                    ].join("\n");
+
+                    return (
+                      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 text-xs font-bold text-cyan-300">
+                            <Terminal className="w-4 h-4 shrink-0" />
+                            <span>راهنمای ساخت مخزن، پیست کدها و Build خودکار در گیت‌هاب</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              carAudio.playButtonTap();
+                              navigator.clipboard?.writeText(gitPushCommands).catch(() => {});
+                              setCopiedGitCmd(true);
+                              setTimeout(() => setCopiedGitCmd(false), 2000);
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] text-slate-200 flex items-center gap-1 shrink-0"
+                          >
+                            {copiedGitCmd ? (
+                              <Check className="w-3 h-3 text-emerald-400" />
+                            ) : (
+                              <Copy className="w-3 h-3" />
+                            )}
+                            <span>{copiedGitCmd ? "کپی شد" : "کپی دستورات"}</span>
+                          </button>
+                        </div>
+
+                        <ol className="text-[11px] text-slate-300 space-y-1 list-decimal list-inside leading-relaxed">
+                          <li>
+                            در سایت گیت‌هاب (<span className="font-mono text-sky-300" dir="ltr">github.com/new</span>) یک مخزن جدید با نام{" "}
+                            <span className="font-mono text-emerald-300" dir="ltr">{targetRepo}</span> بسازید (یا دکمه «مچ خودکار اکانت و ساخت مخزن» بالا را بزنید).
+                          </li>
+                          <li>
+                            فایل‌های دانلودشده را از حالت ZIP خارج کنید، داخل پوشه پروژه ترمینال باز کنید و دستورات زیر را پیست و اجرا کنید:
+                          </li>
+                        </ol>
+
+                        <pre
+                          dir="ltr"
+                          className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-[11px] font-mono text-emerald-300 overflow-x-auto leading-relaxed select-text"
+                        >
+                          {gitPushCommands}
+                        </pre>
+
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          <strong className="text-slate-200">بیلد خودکار و مچ شدن با گیت‌هاب:</strong> فایل{" "}
+                          <span className="font-mono text-cyan-300" dir="ltr">.github/workflows/deploy.yml</span> داخل کدها قرار دارد؛ کافیست در مخزن گیت‌هاب به مسیر{" "}
+                          <span className="font-mono text-slate-200" dir="ltr">Settings → Pages → Source: GitHub Actions</span> بروید تا همزمان با هر آپلود کد، بیلد نهایی ساخته شده و نام کاربری و مخزن شما به‌صورت خودکار با برنامه مچ شود.
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             )}

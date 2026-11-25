@@ -22,7 +22,11 @@ function disableHmrClientWsPlugin(): Plugin {
 }
 
 export default defineConfig(() => {
+  const rawBase = process.env.VITE_BASE_PATH || '/';
+  const basePath = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
+
   return {
+    base: basePath,
     plugins: [
       react(),
       tailwindcss(),
@@ -37,7 +41,7 @@ export default defineConfig(() => {
           'pwa-maskable-512x512.png',
         ],
         manifest: {
-          id: '/',
+          id: basePath,
           name: 'BMW 728Li iDrive Cockpit',
           short_name: 'BMW 728Li',
           description: 'سیستم هوشمند کاکپیت، داشبورد و دستیار صوتی خودروی BMW 728Li',
@@ -45,23 +49,23 @@ export default defineConfig(() => {
           background_color: '#09090b',
           display: 'standalone',
           orientation: 'landscape',
-          start_url: '/',
-          scope: '/',
+          start_url: basePath,
+          scope: basePath,
           icons: [
             {
-              src: '/pwa-192x192.png',
+              src: `${basePath}pwa-192x192.png`,
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: `${basePath}pwa-512x512.png`,
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-maskable-512x512.png',
+              src: `${basePath}pwa-maskable-512x512.png`,
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
@@ -74,34 +78,9 @@ export default defineConfig(() => {
           cleanupOutdatedCaches: true,
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg,webp,woff,woff2}'],
-          navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api\//],
+          navigateFallback: `${basePath}index.html`,
+          navigateFallbackDenylist: [/^\/api\//, /^\/src\//, /^\/@/, /^\/node_modules\//],
           runtimeCaching: [
-            {
-              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-              handler: 'StaleWhileRevalidate',
-              options: {
-                cacheName: 'google-fonts-stylesheets',
-                expiration: {
-                  maxEntries: 10,
-                  maxAgeSeconds: 60 * 60 * 24 * 30,
-                },
-              },
-            },
-            {
-              urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'google-fonts-webfonts',
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-                expiration: {
-                  maxEntries: 30,
-                  maxAgeSeconds: 60 * 60 * 24 * 365,
-                },
-              },
-            },
             {
               urlPattern: /\.(?:png|jpg|jpeg|svg|webp|woff2?)$/i,
               handler: 'CacheFirst',
@@ -116,7 +95,7 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
+          enabled: false,
           type: 'module',
         },
       }),
@@ -124,6 +103,39 @@ export default defineConfig(() => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+      },
+    },
+    build: {
+      chunkSizeWarningLimit: 950,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return;
+            if (id.includes('/node_modules/three/')) {
+              return 'vendor-three';
+            }
+            if (id.includes('/node_modules/firebase/') || id.includes('/node_modules/@firebase/')) {
+              return 'vendor-firebase';
+            }
+            if (
+              id.includes('/node_modules/recharts/') ||
+              id.includes('/node_modules/d3-') ||
+              id.includes('/node_modules/victory-vendor/')
+            ) {
+              return 'vendor-charts';
+            }
+            if (id.includes('/node_modules/lucide-react/')) {
+              return 'vendor-icons';
+            }
+            if (
+              id.includes('/node_modules/react/') ||
+              id.includes('/node_modules/react-dom/') ||
+              id.includes('/node_modules/scheduler/')
+            ) {
+              return 'vendor-react';
+            }
+          },
+        },
       },
     },
     server: {

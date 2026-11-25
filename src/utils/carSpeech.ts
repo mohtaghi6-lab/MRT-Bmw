@@ -1,15 +1,22 @@
-// In-Car Audio & Neural Speech Voice Synthesizer Utility (MRT Enhanced Audio Engine)
+// In-Car Audio & Neural Persian Speech Voice Synthesizer Utility
 
 class CarAudioController {
   private ctx: AudioContext | null = null;
   private currentAudioElement: HTMLAudioElement | null = null;
+  private currentBufferSource: AudioBufferSourceNode | null = null;
   public enabled: boolean = true;
   public isSpeaking: boolean = false;
-  public mrtAudioEngineActive: boolean = true; // MRT Mode flag
-  private onSpeakingStateChangeCallbacks: Array<(speaking: boolean) => void> = [];
+  public mrtAudioEngineActive: boolean = true;
+  private onSpeakingStateChangeCallbacks: Set<(speaking: boolean) => void> = new Set();
+  private cachedVoices: SpeechSynthesisVoice[] = [];
+  private clientTtsCache: Map<string, { base64: string; mimeType: string }> = new Map();
+  private audioUnlocked = false;
 
-  public onSpeakingChange(cb: (speaking: boolean) => void) {
-    this.onSpeakingStateChangeCallbacks.push(cb);
+  public onSpeakingChange(cb: (speaking: boolean) => void): () => void {
+    this.onSpeakingStateChangeCallbacks.add(cb);
+    return () => {
+      this.onSpeakingStateChangeCallbacks.delete(cb);
+    };
   }
 
   private setSpeaking(speaking: boolean) {
@@ -31,6 +38,19 @@ class CarAudioController {
     if (this.ctx && this.ctx.state === "suspended") {
       this.ctx.resume().catch(() => {});
     }
+  }
+
+  // Unlock browser WebAudio & SpeechSynthesis cleanly on the first user tap/key
+  public unlockAudio() {
+    this.initCtx();
+    if (this.audioUnlocked || typeof window === "undefined") return;
+    this.audioUnlocked = true;
+    try {
+      if ("speechSynthesis" in window) {
+        this.cachedVoices = window.speechSynthesis.getVoices();
+        window.speechSynthesis.resume?.();
+      }
+    } catch {}
   }
 
   // Soft subtle BMW tactile iDrive click
@@ -60,7 +80,6 @@ class CarAudioController {
       this.initCtx();
       if (!this.ctx) return;
       const now = this.ctx.currentTime;
-      // BMW harmonic chord: F#5 (739.99 Hz) & C#6 (1108.73 Hz)
       const frequencies = [739.99, 1108.73];
       frequencies.forEach((freq, idx) => {
         const osc = this.ctx!.createOscillator();
@@ -84,7 +103,7 @@ class CarAudioController {
       this.initCtx();
       if (!this.ctx) return;
       const now = this.ctx.currentTime;
-      const freq = locked ? 1760 : 1320; // A6 or E6 high chirp
+      const freq = locked ? 1760 : 1320;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       osc.type = "sine";
@@ -162,6 +181,11 @@ class CarAudioController {
         this.currentAudioElement.currentTime = 0;
         this.currentAudioElement = null;
       }
+      if (this.currentBufferSource) {
+        this.currentBufferSource.stop();
+        this.currentBufferSource.disconnect();
+        this.currentBufferSource = null;
+      }
       if (typeof window !== "undefined" && window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }
@@ -169,14 +193,59 @@ class CarAudioController {
     this.setSpeaking(false);
   }
 
-  // Play Neural Audio from server Base64
-  public async playBase64Audio(base64: string): Promise<boolean> {
+  private async playBase64ViaWebAudio(base64: string): Promise<boolean> {
+    try {
+      this.initCtx();
+      if (!this.ctx) return false;
+      if (this.ctx.state === "suspended") {
+        await this.ctx.resume();
+      }
+      const pureBase64 = base64.includes(",") ? base64.split(",")[1] : base64;
+      const binary = atob(pureBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const audioBuffer = await this.ctx.decodeAudioData(bytes.buffer.slice(0));
+      return await new Promise<boolean>((resolve) => {
+        try {
+          const source = this.ctx!.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(this.ctx!.destination);
+          this.currentBufferSource = source;
+          this.setSpeaking(true);
+          source.onended = () => {
+            this.currentBufferSource = null;
+            this.setSpeaking(false);
+            resolve(true);
+          };
+          source.start(0);
+        } catch {
+          this.currentBufferSource = null;
+          this.setSpeaking(false);
+          resolve(false);
+        }
+      });
+    } catch {
+      this.setSpeaking(false);
+      return false;
+    }
+  }
+
+  // Play Audio from server Base64 (MP3 or WAV) with WebAudio AudioContext fallback
+  public async playBase64Audio(
+    base64: string,
+    mimeType: string = "audio/wav"
+  ): Promise<boolean> {
     if (!this.enabled || !base64) return false;
     this.stopSpeaking();
 
-    return new Promise((resolve) => {
+    const playedHtml = await new Promise<boolean>((resolve) => {
       try {
-        const audioSrc = `data:audio/mp3;base64,${base64}`;
+        const cleanMime = mimeType === "audio/mp3" ? "audio/mp3" : "audio/wav";
+        const audioSrc = base64.startsWith("data:")
+          ? base64
+          : `data:${cleanMime};base64,${base64}`;
         const audio = new Audio(audioSrc);
         this.currentAudioElement = audio;
         this.setSpeaking(true);
@@ -194,96 +263,217 @@ class CarAudioController {
         };
 
         audio.play().catch((err) => {
-          console.warn("Audio play catch:", err);
+          console.warn("Audio play fallback to WebAudio:", err);
           this.setSpeaking(false);
           this.currentAudioElement = null;
           resolve(false);
         });
-      } catch (err) {
+      } catch {
         this.setSpeaking(false);
         resolve(false);
       }
     });
+
+    if (playedHtml) return true;
+    return this.playBase64ViaWebAudio(base64);
   }
 
-  // Speak text with MRT Speech Synthesis & Server Fallback
-  public async speak(text: string, serverAudioBase64?: string | null): Promise<void> {
-    if (!this.enabled || !text) return;
+  private async getAvailableVoices(): Promise<SpeechSynthesisVoice[]> {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return [];
+    if (this.cachedVoices.length > 0) return this.cachedVoices;
 
-    // 1. First priority: Server-generated Neural Persian Voice (Farid/Dilara)
-    if (serverAudioBase64) {
-      const success = await this.playBase64Audio(serverAudioBase64);
-      if (success) return;
+    const immediate = window.speechSynthesis.getVoices();
+    if (immediate.length > 0) {
+      this.cachedVoices = immediate;
+      return immediate;
     }
 
-    // 2. Second priority: Request TTS from server if not provided
-    try {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.audioBase64) {
-          const success = await this.playBase64Audio(data.audioBase64);
-          if (success) return;
+    return new Promise((resolveVoices) => {
+      let done = false;
+      const finishVoices = () => {
+        if (done) return;
+        done = true;
+        window.speechSynthesis.removeEventListener?.("voiceschanged", finishVoices);
+        const loaded = window.speechSynthesis.getVoices();
+        if (loaded.length > 0) this.cachedVoices = loaded;
+        resolveVoices(loaded);
+      };
+      window.speechSynthesis.addEventListener?.("voiceschanged", finishVoices);
+      window.setTimeout(finishVoices, 260);
+    });
+  }
+
+  private findPersianBrowserVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | undefined {
+    return voices.find(
+      (v) =>
+        v.lang.toLowerCase().startsWith("fa") ||
+        v.lang.toLowerCase().includes("fa-ir") ||
+        v.name.toLowerCase().includes("persian") ||
+        v.name.toLowerCase().includes("farsi")
+    );
+  }
+
+  private async speakViaBrowserFa(
+    text: string,
+    faVoice?: SpeechSynthesisVoice
+  ): Promise<boolean> {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      let started = false;
+      let fallbackTimer: number | null = null;
+      let startGuardTimer: number | null = null;
+      let speakDelayTimer: number | null = null;
+
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (speakDelayTimer !== null) window.clearTimeout(speakDelayTimer);
+        if (startGuardTimer !== null) window.clearTimeout(startGuardTimer);
+        if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
+        if (this.speechKeepAliveTimer) {
+          clearInterval(this.speechKeepAliveTimer);
+          this.speechKeepAliveTimer = null;
         }
-      }
-    } catch (err) {
-      console.warn("TTS API fetch fallback to MRT browser synthesis:", err);
-    }
+        this.setSpeaking(false);
+        resolve(ok);
+      };
 
-    // 3. Third priority: MRT Native Web Speech Synthesis in Browser (fa-IR)
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
       try {
         this.stopSpeaking();
         const clean = text.replace(/[*_#`]/g, "").trim();
+        if (!clean) {
+          finish(true);
+          return;
+        }
         const utterance = new SpeechSynthesisUtterance(clean);
-        utterance.lang = "fa-IR";
-        utterance.rate = 1.0;
+        utterance.lang = faVoice?.lang || "fa-IR";
+        if (faVoice) utterance.voice = faVoice;
+        utterance.rate = 0.98;
         utterance.pitch = 1.0;
 
-        // Try to pick a Persian voice if installed in OS
-        const voices = window.speechSynthesis.getVoices();
-        const faVoice = voices.find(
-          (v) => v.lang.includes("fa") || v.lang.includes("FA") || v.name.toLowerCase().includes("persian")
-        );
-        if (faVoice) {
-          utterance.voice = faVoice;
-        }
+        const maxWaitMs = Math.min(28000, Math.max(3800, clean.length * 140));
+        fallbackTimer = window.setTimeout(() => finish(started), maxWaitMs);
 
+        startGuardTimer = window.setTimeout(() => {
+          if (!started && !window.speechSynthesis.speaking) {
+            try {
+              window.speechSynthesis.cancel();
+            } catch {}
+            finish(false);
+          }
+        }, 900);
+
+        this.setSpeaking(true);
         utterance.onstart = () => {
+          started = true;
           this.setSpeaking(true);
-          if (this.speechKeepAliveTimer) clearInterval(this.speechKeepAliveTimer);
-          this.speechKeepAliveTimer = setInterval(() => {
-            if (typeof window !== "undefined" && window.speechSynthesis && window.speechSynthesis.speaking) {
-              window.speechSynthesis.pause();
+        };
+        utterance.onend = () => finish(true);
+        utterance.onerror = () => finish(false);
+
+        this.speechKeepAliveTimer = window.setInterval(() => {
+          try {
+            if (window.speechSynthesis.paused) {
               window.speechSynthesis.resume();
             }
-          }, 8000);
-        };
-        utterance.onend = () => {
-          if (this.speechKeepAliveTimer) {
-            clearInterval(this.speechKeepAliveTimer);
-            this.speechKeepAliveTimer = null;
-          }
-          this.setSpeaking(false);
-        };
-        utterance.onerror = () => {
-          if (this.speechKeepAliveTimer) {
-            clearInterval(this.speechKeepAliveTimer);
-            this.speechKeepAliveTimer = null;
-          }
-          this.setSpeaking(false);
-        };
+          } catch {}
+        }, 3000);
 
-        window.speechSynthesis.speak(utterance);
-      } catch (e) {
-        console.warn("MRT SpeechSynthesis error:", e);
-        this.setSpeaking(false);
+        speakDelayTimer = window.setTimeout(() => {
+          try {
+            window.speechSynthesis.resume?.();
+            window.speechSynthesis.speak(utterance);
+          } catch {
+            finish(false);
+          }
+        }, 50);
+      } catch {
+        finish(false);
+      }
+    });
+  }
+
+  private rememberClientAudio(text: string, base64: string, mimeType: string) {
+    const key = text.trim();
+    if (!key || !base64) return;
+    this.clientTtsCache.set(key, { base64, mimeType });
+    if (this.clientTtsCache.size > 40) {
+      const oldest = this.clientTtsCache.keys().next().value;
+      if (oldest) this.clientTtsCache.delete(oldest);
+    }
+  }
+
+  // Speak crystal-clear Persian text:
+  // 1) Neural server audio (OpenAI / Gemini / Piper fa_IR-amir-medium) ->
+  // 2) Client cached Neural audio or /api/tts Neural Piper Persian voice ->
+  // 3) Native OS browser fa-IR voice fallback when truly offline
+  public async speak(
+    text: string,
+    serverAudioBase64?: string | null,
+    serverAudioMimeType: string = "audio/wav",
+    serverAudioSource?: "neural" | "local-fa" | string
+  ): Promise<void> {
+    if (!this.enabled || !text) return;
+    const key = text.trim();
+
+    // 1. Server neural audio attached directly (OpenAI, Gemini, EdgeTTS, or Piper Persian VITS)
+    if (serverAudioBase64 && serverAudioSource === "neural") {
+      this.rememberClientAudio(key, serverAudioBase64, serverAudioMimeType);
+      const success = await this.playBase64Audio(serverAudioBase64, serverAudioMimeType);
+      if (success) return;
+    }
+
+    // 2. Client cached audio for instant zero-latency greetings/confirmations
+    const cached = this.clientTtsCache.get(key);
+    if (cached) {
+      const success = await this.playBase64Audio(cached.base64, cached.mimeType);
+      if (success) return;
+    }
+
+    // 3. Fetch server Neural Persian voice (/api/tts -> Piper fa_IR-amir-medium) when reachable
+    const isNavigatorOnline = typeof navigator === "undefined" || navigator.onLine !== false;
+    if (isNavigatorOnline) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 12000);
+        try {
+          const res = await fetch("/api/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
+            body: JSON.stringify({ text: key }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.audioBase64) {
+              const mime = data.audioMimeType || "audio/wav";
+              if (data.ttsSource === "neural") {
+                this.rememberClientAudio(key, data.audioBase64, mime);
+              }
+              const success = await this.playBase64Audio(data.audioBase64, mime);
+              if (success) return;
+            }
+          }
+        } finally {
+          window.clearTimeout(timeoutId);
+        }
+      } catch (err) {
+        console.warn("TTS API fetch warning:", err);
       }
     }
+
+    // 4. Play any attached fallback audio if present
+    if (serverAudioBase64) {
+      const success = await this.playBase64Audio(serverAudioBase64, serverAudioMimeType);
+      if (success) return;
+    }
+
+    // 5. Offline OS/browser Persian synthesis fallback
+    const voices = await this.getAvailableVoices();
+    const faVoice = this.findPersianBrowserVoice(voices);
+    await this.speakViaBrowserFa(key, faVoice);
   }
 }
 
@@ -293,8 +483,13 @@ export function stopSpeaking() {
   carAudio.stopSpeaking();
 }
 
-export function speakText(text: string, serverAudioBase64?: string | null) {
-  return carAudio.speak(text, serverAudioBase64);
+export function speakText(
+  text: string,
+  serverAudioBase64?: string | null,
+  serverAudioMimeType: string = "audio/wav",
+  serverAudioSource?: "neural" | "local-fa" | string
+) {
+  return carAudio.speak(text, serverAudioBase64, serverAudioMimeType, serverAudioSource);
 }
 
 export function calculateSpeedVolumeBoost(speedKmH: number = 0) {
@@ -303,7 +498,7 @@ export function calculateSpeedVolumeBoost(speedKmH: number = 0) {
   } else if (speedKmH <= 80) {
     return { gainMultiplier: 1.15, roadNoiseDbCompensation: 2 };
   } else if (speedKmH <= 110) {
-    return { gainMultiplier: 1.30, roadNoiseDbCompensation: 4 };
+    return { gainMultiplier: 1.3, roadNoiseDbCompensation: 4 };
   } else {
     return { gainMultiplier: 1.45, roadNoiseDbCompensation: 6 };
   }

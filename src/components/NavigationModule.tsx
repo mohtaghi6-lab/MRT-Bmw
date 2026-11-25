@@ -47,23 +47,24 @@ export default function NavigationModule({
     speedLimit: 110,
     eta: "۱۷:۳۰",
   });
-  const [gpsSimActive, setGpsSimActive] = useState(true);
+  const [gpsSimActive, setGpsSimActive] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
 
-  // Speed simulation / live GPS
+  // Speed simulation (optional manual test mode; live monitor GPS drives carState automatically)
   useEffect(() => {
-    let interval: any;
+    let interval: ReturnType<typeof setInterval> | undefined;
     if (gpsSimActive) {
       interval = setInterval(() => {
-        // Vary speed smoothly around 55 - 75 km/h
+        const current = carState.speed > 0 ? carState.speed : 58;
         const delta = (Math.random() - 0.48) * 3;
         onUpdateCarState({
-          speed: Math.max(0, Math.min(130, Math.round((carState.speed || 60) + delta))),
-          rpm: Math.round(1800 + ((carState.speed || 60) * 18)),
+          speed: Math.max(0, Math.min(130, Math.round(current + delta))),
         });
       }, 1000);
     }
-    return () => clearInterval(interval);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, [gpsSimActive, carState.speed]);
 
   // Update active route if requested by AI voice assistant

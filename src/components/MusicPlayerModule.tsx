@@ -1,23 +1,18 @@
-import { useState, useRef, useEffect, ChangeEvent, Dispatch, SetStateAction } from "react";
+import { useState, useRef, ChangeEvent, Dispatch, SetStateAction } from "react";
 import {
   Play,
   Pause,
   SkipForward,
   SkipBack,
   Volume2,
-  VolumeX,
   Radio,
-  Music,
   FolderOpen,
-  Repeat,
-  Shuffle,
   Disc3,
-  SlidersHorizontal,
-  Headphones,
   Usb,
   Search,
   CheckCircle2,
-  Sparkles,
+  Trash2,
+  HardDriveDownload,
 } from "lucide-react";
 import { CarState, MusicTrack } from "../types";
 import { carAudio } from "../utils/carSpeech";
@@ -29,6 +24,15 @@ interface MusicPlayerProps {
   setPlaylist: Dispatch<SetStateAction<MusicTrack[]>>;
   currentTrackIndex: number;
   setCurrentTrackIndex: (idx: number) => void;
+  audioProgress?: number;
+  audioCurrentTime?: string;
+  onSeekAudio?: (percent: number) => void;
+  onUploadUsbFiles?: (files: FileList | File[]) => Promise<void>;
+  onConnectUsbFolder?: () => Promise<boolean>;
+  onRemoveUsbTrack?: (trackId: string) => Promise<void>;
+  onClearUsbVault?: () => Promise<void>;
+  usbSavedCount?: number;
+  usbFolderName?: string;
 }
 
 export default function MusicPlayerModule({
@@ -38,116 +42,105 @@ export default function MusicPlayerModule({
   setPlaylist,
   currentTrackIndex,
   setCurrentTrackIndex,
+  audioProgress = 0,
+  audioCurrentTime = "00:00",
+  onSeekAudio,
+  onUploadUsbFiles,
+  onConnectUsbFolder,
+  onRemoveUsbTrack,
+  onClearUsbVault,
+  usbSavedCount = 0,
+  usbFolderName = "",
 }: MusicPlayerProps) {
-  const [progress, setProgress] = useState(35);
   const [radioMode, setRadioMode] = useState(false);
   const [radioFreq, setRadioFreq] = useState(91.5);
   const [searchQuery, setSearchQuery] = useState("");
-  const [flashConnected, setFlashConnected] = useState(true);
+  const [isSavingUsb, setIsSavingUsb] = useState(false);
+  const [usbNotice, setUsbNotice] = useState<string | null>(null);
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentTrack = playlist[currentTrackIndex] || playlist[0];
 
-  // Sync real HTML5 audio playback
-  useEffect(() => {
-    if (!audioRef.current) return;
-
-    if (currentTrack?.url) {
-      if (audioRef.current.src !== currentTrack.url) {
-        audioRef.current.src = currentTrack.url;
-      }
-      if (carState.musicPlaying) {
-        audioRef.current.play().catch(() => {});
-      } else {
-        audioRef.current.pause();
-      }
-    } else {
-      // If no custom URL, simulate track
-      if (!carState.musicPlaying && audioRef.current) {
-        audioRef.current.pause();
-      }
-    }
-  }, [currentTrack, carState.musicPlaying]);
-
-  // Sync volume with audio element
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = Math.max(0, Math.min(1, carState.volume / 100));
-    }
-  }, [carState.volume]);
-
-  // Play / Pause toggle
   const togglePlay = () => {
     carAudio.playButtonTap();
-    const nextPlaying = !carState.musicPlaying;
-    onUpdateCarState({ musicPlaying: nextPlaying });
+    onUpdateCarState({ musicPlaying: !carState.musicPlaying });
   };
 
   const nextTrack = () => {
     carAudio.playButtonTap();
+    if (playlist.length === 0) return;
     const nextIdx = (currentTrackIndex + 1) % playlist.length;
     setCurrentTrackIndex(nextIdx);
     onUpdateCarState({ musicPlaying: true });
-    setProgress(0);
   };
 
   const prevTrack = () => {
     carAudio.playButtonTap();
+    if (playlist.length === 0) return;
     const prevIdx = (currentTrackIndex - 1 + playlist.length) % playlist.length;
     setCurrentTrackIndex(prevIdx);
     onUpdateCarState({ musicPlaying: true });
-    setProgress(0);
   };
 
-  // Progress ticker for synthetic or real tracks
-  useEffect(() => {
-    let interval: any;
-    if (carState.musicPlaying) {
-      interval = setInterval(() => {
-        if (audioRef.current && audioRef.current.duration) {
-          const percent = (audioRef.current.currentTime / audioRef.current.duration) * 100;
-          setProgress(percent);
-        } else {
-          setProgress((prev) => (prev >= 100 ? 0 : prev + 0.6));
-        }
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [carState.musicPlaying]);
-
-  // Handle local multi-file upload from car flash / USB
-  const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
+  // Persist uploaded USB files / folders permanently inside IndexedDB
+  const handleFileUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const newTracks: MusicTrack[] = [];
-
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const url = URL.createObjectURL(file);
-      const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-      const cleanName = file.name.replace(/\.[^/.]+$/, "");
-
-      newTracks.push({
-        id: `flash-${Date.now()}-${i}`,
-        title: cleanName,
-        artist: "خواننده / فلش USB",
-        duration: "03:40",
-        url,
-        isFlash: true,
-        fileSize: `${sizeMB} MB`,
-        fileName: file.name,
-      });
+    setIsSavingUsb(true);
+    try {
+      if (onUploadUsbFiles) {
+        await onUploadUsbFiles(files);
+        setUsbNotice(
+          `${files.length} فایل صوتی از فلش به‌صورت دائمی در برنامه ذخیره شد؛ از این به بعد بدون اسکن مجدد آماده پخش است.`
+        );
+      } else {
+        const newTracks: MusicTrack[] = [];
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const url = URL.createObjectURL(file);
+          const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+          const cleanName = file.name.replace(/\.[^/.]+$/, "");
+          newTracks.push({
+            id: `flash-${Date.now()}-${i}`,
+            title: cleanName,
+            artist: "فلش USB خودرو",
+            duration: "03:40",
+            url,
+            isFlash: true,
+            fileSize: `${sizeMB} MB`,
+            fileName: file.name,
+          });
+        }
+        setPlaylist((prev) => [...newTracks, ...prev]);
+        setCurrentTrackIndex(0);
+        onUpdateCarState({ musicPlaying: true });
+      }
+      carAudio.playBmwGong();
+    } finally {
+      setIsSavingUsb(false);
+      e.target.value = "";
     }
+  };
 
-    setPlaylist((prev) => [...newTracks, ...prev]);
-    setCurrentTrackIndex(0);
-    onUpdateCarState({ musicPlaying: true });
-    setProgress(0);
-    setFlashConnected(true);
+  const handleFolderScanClick = async () => {
+    carAudio.playButtonTap();
+    if (onConnectUsbFolder) {
+      setIsSavingUsb(true);
+      try {
+        const usedDirPicker = await onConnectUsbFolder();
+        if (usedDirPicker) {
+          setUsbNotice("پوشه فلش USB به برنامه متصل و تمام آهنگ‌ها به‌صورت دائمی ذخیره شدند.");
+          carAudio.playBmwGong();
+          return;
+        }
+      } finally {
+        setIsSavingUsb(false);
+      }
+    }
+    folderInputRef.current?.click();
   };
 
   const filteredPlaylist = playlist.filter(
@@ -165,13 +158,6 @@ export default function MusicPlayerModule({
 
   return (
     <div className="h-full flex-1 p-3 sm:p-4 flex flex-col gap-3 select-none overflow-y-auto" dir="rtl">
-      {/* Hidden audio element for genuine in-car MP3 playback */}
-      <audio
-        ref={audioRef}
-        onEnded={nextTrack}
-        className="hidden"
-      />
-
       {/* Hidden local files inputs */}
       <input
         ref={fileInputRef}
@@ -196,7 +182,7 @@ export default function MusicPlayerModule({
         {/* Left/Main Column: Player Deck & Equalizer (7 Cols) */}
         <div className="lg:col-span-7 cockpit-panel rounded-3xl p-4 sm:p-5 flex flex-col justify-between">
           {/* Header Switcher: USB / Media vs FM Radio */}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.1] pb-3">
             <div className="flex items-center gap-1 instrument-well p-1 rounded-xl">
               <button
                 onClick={() => {
@@ -204,9 +190,7 @@ export default function MusicPlayerModule({
                   setRadioMode(false);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  !radioMode
-                    ? "bmw-accent-btn"
-                    : "text-slate-400 hover:text-slate-100"
+                  !radioMode ? "bmw-accent-btn" : "text-amber-100/70 hover:text-white"
                 }`}
               >
                 پخش‌کننده موزیک
@@ -218,9 +202,7 @@ export default function MusicPlayerModule({
                   setRadioMode(true);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
-                  radioMode
-                    ? "bmw-accent-btn"
-                    : "text-slate-400 hover:text-slate-100"
+                  radioMode ? "bmw-accent-btn" : "text-amber-100/70 hover:text-white"
                 }`}
               >
                 <Radio className="w-3.5 h-3.5" />
@@ -229,26 +211,46 @@ export default function MusicPlayerModule({
             </div>
 
             {/* Load from USB / Flash Buttons */}
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <button
+                id="usb-add-files-btn"
                 onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl hardware-key text-slate-200 text-xs hover:text-white"
-                title="انتخاب آهنگ از فلش USB مانیتور"
+                disabled={isSavingUsb}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl hardware-key text-amber-50 text-xs hover:text-white disabled:opacity-60"
+                title="افزودن آهنگ‌ها به حافظه دائمی برنامه از فلش USB"
               >
                 <Usb className="w-3.5 h-3.5 bmw-accent-text" />
                 <span>افزودن از فلش</span>
               </button>
 
               <button
-                onClick={() => folderInputRef.current?.click()}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl hardware-key text-slate-200 text-xs hover:text-white"
-                title="اسکن کل پوشه آهنگ‌های فلش مموری"
+                id="usb-connect-folder-btn"
+                onClick={handleFolderScanClick}
+                disabled={isSavingUsb}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl hardware-key text-amber-50 text-xs hover:text-white disabled:opacity-60"
+                title="اتصال و ذخیره خودکار پوشه فلش بدون نیاز به اسکن مجدد"
               >
-                <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
-                <span>اسکن پوشه فلش</span>
+                <FolderOpen className="w-3.5 h-3.5 text-amber-300" />
+                <span>{isSavingUsb ? "در حال ذخیره دائمی..." : "اتصال دائمی پوشه فلش"}</span>
               </button>
             </div>
           </div>
+
+          {usbNotice && (
+            <div className="mt-2.5 rounded-xl bg-emerald-950/60 border border-emerald-400/40 px-3 py-2 text-[11px] text-emerald-100 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <HardDriveDownload className="w-4 h-4 text-emerald-300 shrink-0" />
+                <span>{usbNotice}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUsbNotice(null)}
+                className="text-emerald-200 hover:text-white text-[10px] font-bold px-2 py-0.5 rounded bg-white/10"
+              >
+                تایید
+              </button>
+            </div>
+          )}
 
           {!radioMode ? (
             /* Media Player View */
@@ -256,7 +258,7 @@ export default function MusicPlayerModule({
               <div className="relative">
                 {/* Rotating Vinyl Disc */}
                 <div
-                  className={`w-28 h-28 rounded-full border-4 border-white/10 bg-gradient-to-tr from-[#05070b] via-[#131926] to-[#05070b] flex items-center justify-center shadow-2xl ${
+                  className={`w-28 h-28 rounded-full border-4 border-amber-200/20 bg-gradient-to-tr from-[#26170e] via-[#4a3020] to-[#26170e] flex items-center justify-center shadow-2xl ${
                     carState.musicPlaying ? "animate-spin-slow" : ""
                   }`}
                 >
@@ -276,7 +278,7 @@ export default function MusicPlayerModule({
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-amber-100/75">
                   {currentTrack?.artist || "پخش صوتی خودرو"}
                 </p>
               </div>
@@ -287,9 +289,7 @@ export default function MusicPlayerModule({
                   <div
                     key={idx}
                     className={`w-1 rounded-full transition-all duration-200 ${
-                      carState.musicPlaying
-                        ? "bmw-accent-fill"
-                        : "bg-white/10"
+                      carState.musicPlaying ? "bmw-accent-fill" : "bg-white/15"
                     }`}
                     style={{
                       height: carState.musicPlaying
@@ -300,16 +300,26 @@ export default function MusicPlayerModule({
                 ))}
               </div>
 
-              {/* Progress Bar */}
+              {/* Interactive Seekable Progress Bar */}
               <div className="w-full max-w-md space-y-1">
-                <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+                <div
+                  onClick={(e) => {
+                    if (!onSeekAudio) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const clickX = e.clientX - rect.left;
+                    const pct = (clickX / rect.width) * 100;
+                    onSeekAudio(pct);
+                  }}
+                  className="w-full h-2 bg-white/15 rounded-full overflow-hidden cursor-pointer"
+                  title="لمس برای جابجایی زمان آهنگ"
+                >
                   <div
                     className="h-full bmw-accent-fill rounded-full transition-all duration-300"
-                    style={{ width: `${progress}%` }}
+                    style={{ width: `${Math.min(100, Math.max(0, audioProgress))}%` }}
                   />
                 </div>
-                <div className="flex justify-between text-[10px] text-slate-400 font-mono tabular-nums">
-                  <span>01:24</span>
+                <div className="flex justify-between text-[10px] text-amber-100/70 font-mono tabular-nums">
+                  <span>{audioCurrentTime}</span>
                   <span>{currentTrack?.duration || "03:30"}</span>
                 </div>
               </div>
@@ -318,7 +328,7 @@ export default function MusicPlayerModule({
               <div className="flex items-center gap-4">
                 <button
                   onClick={prevTrack}
-                  className="p-3 rounded-full hardware-key text-slate-300 hover:text-white active:scale-95"
+                  className="p-3 rounded-full hardware-key text-amber-100 hover:text-white active:scale-95"
                   title="آهنگ قبلی"
                 >
                   <SkipForward className="w-5 h-5" />
@@ -339,7 +349,7 @@ export default function MusicPlayerModule({
 
                 <button
                   onClick={nextTrack}
-                  className="p-3 rounded-full hardware-key text-slate-300 hover:text-white active:scale-95"
+                  className="p-3 rounded-full hardware-key text-amber-100 hover:text-white active:scale-95"
                   title="آهنگ بعدی"
                 >
                   <SkipBack className="w-5 h-5" />
@@ -350,12 +360,12 @@ export default function MusicPlayerModule({
             /* FM Radio Tuner View */
             <div className="flex flex-col items-center justify-center my-auto py-3 gap-4">
               <div className="text-center">
-                <span className="text-[11px] text-slate-400 font-mono block">
+                <span className="text-[11px] text-amber-100/75 font-mono block">
                   فرکانس رادیویی FM خودرو
                 </span>
-                <div className="text-4xl font-black font-mono text-cyan-400 mt-1">
+                <div className="text-4xl font-black font-mono bmw-accent-text mt-1">
                   {radioFreq.toFixed(1)}{" "}
-                  <span className="text-xs text-slate-500">MHz</span>
+                  <span className="text-xs text-amber-200/60">MHz</span>
                 </div>
               </div>
 
@@ -371,14 +381,12 @@ export default function MusicPlayerModule({
                     }}
                     className={`p-2.5 rounded-xl border text-xs font-semibold text-right transition ${
                       Math.abs(radioFreq - station.freq) < 0.1
-                        ? "bg-cyan-950 border-cyan-500 text-cyan-300"
-                        : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                        ? "bmw-accent-surface font-bold"
+                        : "instrument-well text-amber-100/75 hover:text-white"
                     }`}
                   >
-                    <span className="block font-bold text-slate-100">
-                      {station.name}
-                    </span>
-                    <span className="text-[10px] font-mono text-cyan-400">
+                    <span className="block font-bold text-white">{station.name}</span>
+                    <span className="text-[10px] font-mono bmw-accent-text">
                       {station.freq} MHz
                     </span>
                   </button>
@@ -388,13 +396,11 @@ export default function MusicPlayerModule({
           )}
 
           {/* Bottom Volume Slider */}
-          <div className="flex items-center justify-between border-t border-slate-800 pt-2.5 px-2">
-            <div className="flex items-center gap-2 text-xs text-slate-400">
-              <Volume2 className="w-4 h-4 text-cyan-400" />
+          <div className="flex items-center justify-between border-t border-white/[0.1] pt-2.5 px-2">
+            <div className="flex items-center gap-2 text-xs text-amber-100/80">
+              <Volume2 className="w-4 h-4 bmw-accent-text" />
               <span>میزان صدای خودرو:</span>
-              <span className="font-mono font-bold text-slate-200">
-                %{carState.volume}
-              </span>
+              <span className="font-mono font-bold text-white">%{carState.volume}</span>
             </div>
 
             <input
@@ -402,27 +408,40 @@ export default function MusicPlayerModule({
               min="0"
               max="100"
               value={carState.volume}
-              onChange={(e) =>
-                onUpdateCarState({ volume: parseInt(e.target.value, 10) })
-              }
-              className="w-36 accent-cyan-500 cursor-pointer"
+              onChange={(e) => onUpdateCarState({ volume: parseInt(e.target.value, 10) })}
+              className="w-36 accent-amber-400 cursor-pointer"
             />
           </div>
         </div>
 
-        {/* Right Column: Playlist & Audio Storage (5 Cols) */}
+        {/* Right Column: Persistent USB Playlist & Audio Storage (5 Cols) */}
         <div className="lg:col-span-5 cockpit-panel rounded-3xl p-4 sm:p-5 flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between border-b border-white/[0.08] pb-2.5">
-              <div className="flex items-center gap-2">
-                <Usb className="w-4 h-4 bmw-accent-text" />
-                <h3 className="text-xs font-bold text-white">
-                  آهنگ‌های فلش USB و حافظه خودرو
+            <div className="flex items-center justify-between border-b border-white/[0.1] pb-2.5 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Usb className="w-4 h-4 bmw-accent-text shrink-0" />
+                <h3 className="text-xs font-bold text-white truncate">
+                  آهنگ‌های فلش USB {usbFolderName ? `(${usbFolderName})` : "و حافظه دائمی"}
                 </h3>
               </div>
-              <span className="text-[11px] bmw-accent-text font-mono font-semibold tabular-nums">
-                {playlist.length} ترانه
-              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-[11px] bmw-accent-text font-mono font-semibold tabular-nums">
+                  {playlist.length} ترانه
+                </span>
+                {usbSavedCount > 0 && onClearUsbVault && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      carAudio.playButtonTap();
+                      void onClearUsbVault();
+                    }}
+                    className="p-1 rounded-lg bg-rose-950/60 hover:bg-rose-900/70 border border-rose-500/40 text-rose-300"
+                    title="پاک کردن آهنگ‌های ذخیره شده از حافظه فلش"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Quick Search */}
@@ -431,14 +450,14 @@ export default function MusicPlayerModule({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="جستجو در بین آهنگ‌های فلش..."
-                className="w-full instrument-well focus:border-white/25 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-500 outline-none pr-8"
+                placeholder="جستجو در بین آهنگ‌های ذخیره شده..."
+                className="w-full instrument-well focus:border-amber-200/30 rounded-xl px-3 py-2 text-xs text-white placeholder-amber-200/50 outline-none pr-8"
               />
-              <Search className="w-3.5 h-3.5 text-slate-500 absolute right-2.5 top-2.5" />
+              <Search className="w-3.5 h-3.5 text-amber-200/50 absolute right-2.5 top-2.5" />
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto space-y-1.5 my-2 max-h-[200px]">
+          <div className="flex-1 overflow-y-auto space-y-1.5 my-2 max-h-[220px]">
             {filteredPlaylist.map((track, idx) => {
               const originalIdx = playlist.findIndex((t) => t.id === track.id);
               const isSelected = currentTrackIndex === originalIdx;
@@ -453,51 +472,64 @@ export default function MusicPlayerModule({
                   }}
                   className={`p-2 rounded-xl border flex items-center justify-between cursor-pointer transition active:scale-[0.98] ${
                     isSelected
-                      ? "bg-cyan-950/70 border-cyan-500/50 text-cyan-300"
-                      : "bg-slate-950/60 border-slate-800/80 text-slate-400 hover:text-slate-200 hover:border-slate-700"
+                      ? "bmw-accent-surface"
+                      : "instrument-well text-amber-100/75 hover:text-white hover:border-amber-200/25"
                   }`}
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
                     <div
-                      className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-mono font-bold ${
-                        isSelected
-                          ? "bg-cyan-500 text-slate-950"
-                          : "bg-slate-900 text-slate-500"
+                      className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-mono font-bold shrink-0 ${
+                        isSelected ? "bmw-accent-btn" : "bg-black/30 text-amber-200/60"
                       }`}
                     >
                       {idx + 1}
                     </div>
-                    <div className="max-w-[140px] sm:max-w-[180px]">
-                      <h4 className="text-xs font-semibold text-slate-200 truncate">
+                    <div className="max-w-[140px] sm:max-w-[170px]">
+                      <h4 className="text-xs font-semibold text-white truncate">
                         {track.title}
                       </h4>
-                      <p className="text-[10px] text-slate-400 truncate">{track.artist}</p>
+                      <p className="text-[10px] text-amber-100/65 truncate">{track.artist}</p>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     {track.isFlash && (
-                      <span className="text-[9px] bg-cyan-900/60 text-cyan-300 px-1 py-0.5 rounded font-mono">
+                      <span className="text-[9px] bg-amber-500/20 text-amber-200 px-1.5 py-0.5 rounded font-mono">
                         USB
                       </span>
                     )}
-                    <span className="text-[10px] font-mono text-slate-500">
+                    <span className="text-[10px] font-mono text-amber-100/70">
                       {track.duration}
                     </span>
+                    {track.id.startsWith("usb-") && onRemoveUsbTrack && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          carAudio.playButtonTap();
+                          void onRemoveUsbTrack(track.id);
+                        }}
+                        className="p-1 rounded hover:bg-rose-500/20 text-amber-200/60 hover:text-rose-300"
+                        title="حذف این آهنگ از حافظه فلش"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
                   </div>
                 </div>
               );
             })}
           </div>
 
-          {/* Audio Storage & Voice Instruction Notice */}
-          <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-[10px] text-slate-400 flex flex-col gap-1">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1 text-slate-300">
-                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                فلش USB متصل و آماده
+          {/* Persistent USB Storage Status */}
+          <div className="instrument-well p-2.5 rounded-xl text-[10px] text-amber-100/80 flex flex-col gap-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1 text-emerald-300 font-semibold">
+                <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                {usbSavedCount > 0
+                  ? `${usbSavedCount} آهنگ فلش به‌صورت دائمی ذخیره شد (بدون نیاز به اسکن مجدد)`
+                  : "با یک‌بار افزودن از فلش، تمام آهنگ‌ها داخل برنامه ذخیره می‌شوند"}
               </span>
-              <span className="text-cyan-400 font-mono">فرمان صوتی: «MRT آهنگ فلش»</span>
             </div>
           </div>
         </div>

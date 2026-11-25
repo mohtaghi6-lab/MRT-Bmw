@@ -1,4 +1,5 @@
 export type AmbientLightingThemeId =
+  | "cognac-gold"
   | "classic-orange"
   | "sport-red"
   | "modern-blue"
@@ -22,6 +23,19 @@ export interface AmbientThemeConfig {
 
 export const AMBIENT_LIGHTING_THEMES: AmbientThemeConfig[] = [
   {
+    id: "cognac-gold",
+    labelEn: "Cognac Glass",
+    labelFa: "قهوه‌ای روشن شیشه‌ای",
+    descriptionFa: "چرم تارتوفو و شیشه گرم لوکس BMW Individual",
+    primaryHex: "#d99b52",
+    secondaryHex: "#b67231",
+    textHex: "#f7d4a6",
+    buttonTextHex: "#1c110a",
+    softBg: "rgba(217, 155, 82, 0.22)",
+    borderHex: "rgba(240, 190, 130, 0.45)",
+    glowHex: "rgba(217, 155, 82, 0.35)",
+  },
+  {
     id: "classic-orange",
     labelEn: "Classic Orange",
     labelFa: "نارنجی کلاسیک BMW",
@@ -30,7 +44,7 @@ export const AMBIENT_LIGHTING_THEMES: AmbientThemeConfig[] = [
     secondaryHex: "#ea580c",
     textHex: "#fdba74",
     buttonTextHex: "#09090b",
-    softBg: "rgba(249, 115, 22, 0.14)",
+    softBg: "rgba(249, 115, 22, 0.18)",
     borderHex: "rgba(249, 115, 22, 0.45)",
     glowHex: "rgba(249, 115, 22, 0.35)",
   },
@@ -43,7 +57,7 @@ export const AMBIENT_LIGHTING_THEMES: AmbientThemeConfig[] = [
     secondaryHex: "#dc2626",
     textHex: "#fca5a5",
     buttonTextHex: "#ffffff",
-    softBg: "rgba(239, 68, 68, 0.14)",
+    softBg: "rgba(239, 68, 68, 0.18)",
     borderHex: "rgba(239, 68, 68, 0.45)",
     glowHex: "rgba(239, 68, 68, 0.35)",
   },
@@ -56,7 +70,7 @@ export const AMBIENT_LIGHTING_THEMES: AmbientThemeConfig[] = [
     secondaryHex: "#2563eb",
     textHex: "#7dd3fc",
     buttonTextHex: "#ffffff",
-    softBg: "rgba(14, 165, 233, 0.14)",
+    softBg: "rgba(14, 165, 233, 0.16)",
     borderHex: "rgba(14, 165, 233, 0.45)",
     glowHex: "rgba(14, 165, 233, 0.35)",
   },
@@ -69,7 +83,7 @@ export const AMBIENT_LIGHTING_THEMES: AmbientThemeConfig[] = [
     secondaryHex: "#059669",
     textHex: "#6ee7b7",
     buttonTextHex: "#09090b",
-    softBg: "rgba(16, 185, 129, 0.14)",
+    softBg: "rgba(16, 185, 129, 0.16)",
     borderHex: "rgba(16, 185, 129, 0.45)",
     glowHex: "rgba(16, 185, 129, 0.35)",
   },
@@ -82,7 +96,7 @@ export const AMBIENT_LIGHTING_THEMES: AmbientThemeConfig[] = [
     secondaryHex: "#7c3aed",
     textHex: "#d8b4fe",
     buttonTextHex: "#ffffff",
-    softBg: "rgba(168, 85, 247, 0.14)",
+    softBg: "rgba(168, 85, 247, 0.16)",
     borderHex: "rgba(168, 85, 247, 0.45)",
     glowHex: "rgba(168, 85, 247, 0.35)",
   },
@@ -95,13 +109,13 @@ export const AMBIENT_LIGHTING_THEMES: AmbientThemeConfig[] = [
     secondaryHex: "#94a3b8",
     textHex: "#f8fafc",
     buttonTextHex: "#09090b",
-    softBg: "rgba(226, 232, 240, 0.14)",
+    softBg: "rgba(226, 232, 240, 0.16)",
     borderHex: "rgba(226, 232, 240, 0.45)",
     glowHex: "rgba(226, 232, 240, 0.28)",
   },
 ];
 
-export const DEFAULT_AMBIENT_THEME_ID: AmbientLightingThemeId = "modern-blue";
+export const DEFAULT_AMBIENT_THEME_ID: AmbientLightingThemeId = "classic-orange";
 
 export function getAmbientTheme(id?: string): AmbientThemeConfig {
   return (

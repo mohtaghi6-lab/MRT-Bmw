@@ -1,16 +1,15 @@
 import React, { useEffect, useState } from "react";
 
 interface AnalogClockProps {
-  variant?: "compact" | "chronometer";
+  variant?: "compact" | "cluster" | "chronometer";
   showDate?: boolean;
   showDigitalSub?: boolean;
   className?: string;
 }
 
 export default function AnalogClock({
-  variant = "compact",
+  variant = "chronometer",
   showDate = true,
-  showDigitalSub = true,
   className = "",
 }: AnalogClockProps) {
   const [now, setNow] = useState<Date>(() => new Date());
@@ -26,16 +25,9 @@ export default function AnalogClock({
   const minutes = now.getMinutes();
   const seconds = now.getSeconds();
 
-  // Exact angular calculations for analog hands
   const secondAngle = seconds * 6;
   const minuteAngle = minutes * 6 + seconds * 0.1;
   const hourAngle = hours * 30 + minutes * 0.5;
-
-  const digitalTime = now.toLocaleTimeString("fa-IR", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
 
   const persianDate = now.toLocaleDateString("fa-IR", {
     weekday: "long",
@@ -44,22 +36,28 @@ export default function AnalogClock({
   });
 
   const isLarge = variant === "chronometer";
-  const dialSizeClass = isLarge ? "w-28 h-28 sm:w-32 sm:h-32" : "w-10 h-10 sm:w-11 sm:h-11";
+  const isCluster = variant === "cluster";
+  const showDetailFace = isLarge || isCluster;
+  const dialSizeClass = isLarge
+    ? "w-28 h-28 sm:w-32 sm:h-32"
+    : isCluster
+      ? "w-20 h-20 sm:w-24 sm:h-24 lg:w-[104px] lg:h-[104px]"
+      : "w-12 h-12 sm:w-14 sm:h-14";
 
   return (
     <div
-      className={`flex items-center gap-2.5 select-none ${className}`}
-      aria-label={`ساعت عقربه‌ای ${digitalTime}`}
+      className={`flex items-center gap-3 select-none ${className}`}
+      aria-label="ساعت عقربه‌ای ب‌ام‌و 728Li"
     >
-      {/* Precision BMW Analog Chronometer SVG Dial */}
+      {/* Precision BMW Analog Chronometer SVG Dial (Analog-Only, No Digital Time) */}
       <div
-        className={`${dialSizeClass} rounded-full relative shrink-0 shadow-[0_0_18px_rgba(0,0,0,0.65)]`}
+        className={`${dialSizeClass} rounded-full relative shrink-0 shadow-[0_0_24px_rgba(0,0,0,0.9)]`}
         style={{
           background:
-            "radial-gradient(circle at 35% 30%, #1c2434 0%, #0a0f18 68%, #04060b 100%)",
-          border: isLarge
-            ? "2px solid rgba(255,255,255,0.2)"
-            : "1.5px solid rgba(255,255,255,0.22)",
+            "radial-gradient(circle at 35% 30%, #172a2e 0%, #071114 68%, #020506 100%)",
+          border: showDetailFace
+            ? "2px solid rgba(204,251,241,0.34)"
+            : "1.5px solid rgba(204,251,241,0.26)",
         }}
       >
         <svg viewBox="0 0 120 120" className="w-full h-full">
@@ -69,27 +67,27 @@ export default function AnalogClock({
             cy="60"
             r="56"
             fill="none"
-            stroke="rgba(255,255,255,0.08)"
-            strokeWidth="1.2"
+            stroke="rgba(255,255,255,0.14)"
+            strokeWidth="1.4"
           />
           <circle
             cx="60"
             cy="60"
             r="51"
             fill="none"
-            stroke="var(--bmw-accent, #38bdf8)"
-            strokeOpacity="0.28"
-            strokeWidth="0.9"
+            stroke="var(--bmw-accent, #d99b52)"
+            strokeOpacity="0.42"
+            strokeWidth="1.1"
           />
 
-          {/* 60 minute/second ticks in chronometer mode, 12 hour ticks in both */}
-          {Array.from({ length: isLarge ? 60 : 12 }).map((_, idx) => {
-            const total = isLarge ? 60 : 12;
+          {/* 60 minute/second ticks */}
+          {Array.from({ length: showDetailFace ? 60 : 12 }).map((_, idx) => {
+            const total = showDetailFace ? 60 : 12;
             const deg = (idx * 360) / total;
-            const isMajor = isLarge ? idx % 5 === 0 : idx % 3 === 0;
-            const isCardinal = isLarge ? idx % 15 === 0 : idx % 3 === 0;
+            const isMajor = showDetailFace ? idx % 5 === 0 : idx % 3 === 0;
+            const isCardinal = showDetailFace ? idx % 15 === 0 : idx % 3 === 0;
             const y1 = isCardinal ? 8 : isMajor ? 10 : 11;
-            const y2 = isCardinal ? 17 : isMajor ? 16 : 14;
+            const y2 = isCardinal ? 18 : isMajor ? 16 : 14;
             return (
               <line
                 key={idx}
@@ -99,26 +97,42 @@ export default function AnalogClock({
                 y2={y2}
                 stroke={
                   isCardinal
-                    ? "var(--bmw-accent, #38bdf8)"
+                    ? "var(--bmw-accent, #ff731d)"
                     : isMajor
-                      ? "#e2e8f0"
+                      ? "#f8fafc"
                       : "rgba(148,163,184,0.45)"
                 }
-                strokeWidth={isCardinal ? "2.4" : isMajor ? "1.8" : "0.9"}
+                strokeWidth={isCardinal ? "2.8" : isMajor ? "2" : "0.9"}
                 strokeLinecap="round"
                 transform={`rotate(${deg} 60 60)`}
               />
             );
           })}
 
-          {/* Dial brand typography for Chronometer variant */}
+          {isCluster && (
+            <>
+              <text x="60" y="30" textAnchor="middle" fill="#f8fafc" fontSize="10" fontWeight="800" fontFamily="monospace">
+                12
+              </text>
+              <text x="95" y="63.5" textAnchor="middle" fill="#cbd5e1" fontSize="9.5" fontWeight="700" fontFamily="monospace">
+                3
+              </text>
+              <text x="60" y="99" textAnchor="middle" fill="#cbd5e1" fontSize="9.5" fontWeight="700" fontFamily="monospace">
+                6
+              </text>
+              <text x="25" y="63.5" textAnchor="middle" fill="#cbd5e1" fontSize="9.5" fontWeight="700" fontFamily="monospace">
+                9
+              </text>
+            </>
+          )}
+
           {isLarge && (
             <>
               <text
                 x="60"
                 y="34"
                 textAnchor="middle"
-                fill="#cbd5e1"
+                fill="#e2e8f0"
                 fontSize="7"
                 fontWeight="800"
                 letterSpacing="1.6"
@@ -130,7 +144,7 @@ export default function AnalogClock({
                 x="60"
                 y="88"
                 textAnchor="middle"
-                fill="rgba(148,163,184,0.85)"
+                fill="rgba(247,212,166,0.85)"
                 fontSize="5.5"
                 fontWeight="700"
                 letterSpacing="1"
@@ -148,18 +162,18 @@ export default function AnalogClock({
               y1="66"
               x2="60"
               y2="31"
-              stroke="#f8fafc"
-              strokeWidth={isLarge ? "4.2" : "5"}
+              stroke="#ffffff"
+              strokeWidth={showDetailFace ? "4.6" : "5"}
               strokeLinecap="round"
             />
-            {isLarge && (
+            {showDetailFace && (
               <line
                 x1="60"
                 y1="52"
                 x2="60"
                 y2="34"
-                stroke="var(--bmw-accent, #38bdf8)"
-                strokeWidth="1.5"
+                stroke="var(--bmw-accent, #ff731d)"
+                strokeWidth="1.7"
                 strokeLinecap="round"
               />
             )}
@@ -173,53 +187,35 @@ export default function AnalogClock({
               x2="60"
               y2="19"
               stroke="#e2e8f0"
-              strokeWidth={isLarge ? "2.8" : "3.5"}
+              strokeWidth={showDetailFace ? "3.2" : "3.5"}
               strokeLinecap="round"
             />
           </g>
 
-          {/* Second Hand (BMW M-Orange / Accent Sweep) */}
+          {/* Second Hand */}
           <g transform={`rotate(${secondAngle} 60 60)`}>
             <line
               x1="60"
               y1="72"
               x2="60"
               y2="15"
-              stroke="#f97316"
-              strokeWidth={isLarge ? "1.4" : "1.8"}
+              stroke="#ff731d"
+              strokeWidth={showDetailFace ? "1.7" : "1.8"}
               strokeLinecap="round"
             />
-            <circle cx="60" cy="70" r="2.2" fill="#f97316" />
+            <circle cx="60" cy="70" r="2.2" fill="#ff731d" />
           </g>
 
-          {/* Center Pinion Cap */}
-          <circle cx="60" cy="60" r={isLarge ? "4.4" : "5"} fill="#0f172a" stroke="#f8fafc" strokeWidth="1.5" />
-          <circle cx="60" cy="60" r="1.8" fill="#f97316" />
+          <circle cx="60" cy="60" r={showDetailFace ? "4.6" : "5"} fill="#0f172a" stroke="#f8fafc" strokeWidth="1.6" />
+          <circle cx="60" cy="60" r="2" fill="#ff731d" />
         </svg>
       </div>
 
-      {/* Optional Date & Clean Tabular Sub-readout */}
-      {(showDigitalSub || showDate) && (
+      {showDate && (
         <div className="flex flex-col leading-tight min-w-0">
-          {showDigitalSub && (
-            <span
-              className={`${
-                isLarge ? "text-base sm:text-lg" : "text-xs sm:text-[13px]"
-              } font-mono font-bold tracking-wider text-white tabular-nums`}
-              dir="ltr"
-            >
-              {digitalTime}
-            </span>
-          )}
-          {showDate && (
-            <span
-              className={`${
-                isLarge ? "text-xs text-slate-300 mt-0.5" : "text-[10px] text-slate-400"
-              } truncate`}
-            >
-              {persianDate}
-            </span>
-          )}
+          <span className="text-xs sm:text-sm font-bold text-amber-100 truncate">
+            {persianDate}
+          </span>
         </div>
       )}
     </div>

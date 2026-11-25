@@ -1,0 +1,72 @@
+name: Build & Deploy BMW 728Li iDrive Cockpit
+
+on:
+  push:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      pages_enabled: ${{ steps.pages.outcome == 'success' }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci || npm install --no-audit --no-fund
+
+      - name: TypeScript & Lint Check
+        run: npm run lint
+
+      - name: Build App (Auto-Matched to GitHub Repo)
+        env:
+          VITE_BASE_PATH: /${{ github.event.repository.name }}/
+          VITE_GITHUB_OWNER: ${{ github.repository_owner }}
+          VITE_GITHUB_REPO: ${{ github.event.repository.name }}
+        run: npm run build
+
+      - name: Upload Compiled Dist Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bmw728li-dist
+          path: ./dist
+
+      - name: Setup GitHub Pages (If Enabled in Repo)
+        id: pages
+        continue-on-error: true
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages Artifact
+        if: steps.pages.outcome == 'success'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+  deploy:
+    if: needs.build.outputs.pages_enabled == 'true'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -48,11 +48,51 @@ export interface GitHubRestoreResult {
 
 const STORAGE_KEY = "bmw728li_github_sync_config";
 
+export const DEFAULT_GITHUB_OWNER = "mohtaghi6-lab";
+export const DEFAULT_GITHUB_REPO = "bmw728li-idrive-cockpit";
+export const DEFAULT_GITHUB_REPO_URL = "https://github.com/mohtaghi6-lab/bmw728li-idrive-cockpit";
+export const DEFAULT_GITHUB_COMMIT_URL =
+  "https://github.com/mohtaghi6-lab/bmw728li-idrive-cockpit/commit/79113b0a01f80b711d425b9e5c72818d3c694ac5";
+
+function detectGitHubDefaults(): { owner: string; repo: string } {
+  const envOwner =
+    typeof import.meta !== "undefined" && import.meta.env?.VITE_GITHUB_OWNER
+      ? String(import.meta.env.VITE_GITHUB_OWNER).trim()
+      : "";
+  const envRepo =
+    typeof import.meta !== "undefined" && import.meta.env?.VITE_GITHUB_REPO
+      ? String(import.meta.env.VITE_GITHUB_REPO).trim()
+      : "";
+
+  if (envOwner && envRepo) {
+    return { owner: envOwner, repo: envRepo };
+  }
+
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname.toLowerCase();
+    if (host.endsWith(".github.io")) {
+      const ownerFromHost = host.replace(".github.io", "");
+      const segs = window.location.pathname.split("/").filter(Boolean);
+      const repoFromPath = segs[0] || DEFAULT_GITHUB_REPO;
+      return {
+        owner: envOwner || ownerFromHost,
+        repo: envRepo || repoFromPath,
+      };
+    }
+  }
+
+  return {
+    owner: envOwner || DEFAULT_GITHUB_OWNER,
+    repo: envRepo || DEFAULT_GITHUB_REPO,
+  };
+}
+
 export function getDefaultGitHubConfig(): GitHubSyncConfig {
+  const detected = detectGitHubDefaults();
   return {
     token: "",
-    owner: "",
-    repo: "bmw728li-diagnostics-backup",
+    owner: detected.owner,
+    repo: detected.repo,
     branch: "main",
     filePath: "backups/bmw728li-state.json",
   };
@@ -64,11 +104,19 @@ export function loadGitHubConfig(): GitHubSyncConfig {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
+    const savedOwner = typeof parsed.owner === "string" ? parsed.owner.trim() : "";
+    const savedRepo = typeof parsed.repo === "string" ? parsed.repo.trim() : "";
+    const isOldPlaceholder =
+      !savedOwner && (!savedRepo || savedRepo === "bmw728li-diagnostics-backup");
+
     return {
       token: typeof parsed.token === "string" ? parsed.token : "",
-      owner: typeof parsed.owner === "string" ? parsed.owner : "",
-      repo: typeof parsed.repo === "string" && parsed.repo.trim() ? parsed.repo : fallback.repo,
-      branch: typeof parsed.branch === "string" && parsed.branch.trim() ? parsed.branch : fallback.branch,
+      owner: savedOwner || fallback.owner,
+      repo: isOldPlaceholder ? fallback.repo : savedRepo || fallback.repo,
+      branch:
+        typeof parsed.branch === "string" && parsed.branch.trim()
+          ? parsed.branch
+          : fallback.branch,
       filePath:
         typeof parsed.filePath === "string" && parsed.filePath.trim()
           ? parsed.filePath
@@ -149,6 +197,106 @@ function mapGitHubError(status: number, bodyMsg?: string): string {
     return `خطای اعتبارسنجی شاخه یا SHA در گیت‌هاب: ${bodyMsg || "Unprocessable Entity"}`;
   }
   return bodyMsg ? `خطای گیت‌هاب (${status}): ${bodyMsg}` : `خطای ارتباط با گیت‌هاب (${status})`;
+}
+
+export interface GitHubAutoMatchResult {
+  ok: boolean;
+  message: string;
+  owner?: string;
+  repo?: string;
+  branch?: string;
+  createdNewRepo?: boolean;
+  repoUrl?: string;
+}
+
+export async function autoMatchAndEnsureGitHubRepo(
+  config: GitHubSyncConfig
+): Promise<GitHubAutoMatchResult> {
+  const token = config.token.trim();
+  if (!token) {
+    return {
+      ok: false,
+      message: "ابتدا توکن دسترسی شخصی گیت‌هاب (PAT) را وارد کنید.",
+    };
+  }
+
+  const headers = buildHeaders(token);
+  try {
+    // 1. Identify authenticated GitHub user from PAT
+    const userRes = await fetch("https://api.github.com/user", { headers });
+    const userData = await userRes.json().catch(() => ({}));
+    if (!userRes.ok || !userData?.login) {
+      return {
+        ok: false,
+        message: mapGitHubError(userRes.status, userData?.message),
+      };
+    }
+
+    const detectedOwner = String(userData.login);
+    const targetRepo = (config.repo || "bmw728li-diagnostics-backup").trim();
+
+    // 2. Check if repository already exists
+    const repoRes = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(detectedOwner)}/${encodeURIComponent(targetRepo)}`,
+      { headers }
+    );
+
+    if (repoRes.ok) {
+      const repoData = await repoRes.json();
+      return {
+        ok: true,
+        message: `اکانت گیت‌هاب (${detectedOwner}) با مخزن ${repoData.full_name} مچ شد.`,
+        owner: detectedOwner,
+        repo: repoData.name,
+        branch: repoData.default_branch || config.branch || "main",
+        createdNewRepo: false,
+        repoUrl: repoData.html_url,
+      };
+    }
+
+    // 3. Create private backup repo automatically if not found (404)
+    if (repoRes.status === 404) {
+      const createRes = await fetch("https://api.github.com/user/repos", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          name: targetRepo,
+          description: "BMW 728Li iDrive Cockpit — Diagnostic Logs & Vehicle Backup",
+          private: true,
+          auto_init: true,
+        }),
+      });
+      const createData = await createRes.json().catch(() => ({}));
+      if (!createRes.ok) {
+        return {
+          ok: false,
+          owner: detectedOwner,
+          message: mapGitHubError(createRes.status, createData?.message),
+        };
+      }
+      return {
+        ok: true,
+        message: `اکانت ${detectedOwner} شناسایی و مخزن خصوصی ${createData.full_name} ساخته و مچ شد!`,
+        owner: detectedOwner,
+        repo: createData.name,
+        branch: createData.default_branch || "main",
+        createdNewRepo: true,
+        repoUrl: createData.html_url,
+      };
+    }
+
+    const errData = await repoRes.json().catch(() => ({}));
+    return {
+      ok: false,
+      owner: detectedOwner,
+      message: mapGitHubError(repoRes.status, errData?.message),
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      message: err?.message || "خطای شبکه هنگام اتصال خودکار به گیت‌هاب.",
+    };
+  }
 }
 
 export async function verifyGitHubRepoConnection(
@@ -330,6 +478,57 @@ export async function restoreStateFromGitHub(
     return {
       success: false,
       message: err?.message || "خطا در خواندن فایل بکاپ از گیت‌هاب.",
+    };
+  }
+}
+
+export interface GitHubProjectPushResult {
+  success: boolean;
+  message: string;
+  commitUrl?: string;
+  pagesUrl?: string;
+  filesCount?: number;
+}
+
+export async function pushProjectSourceToGitHub(
+  config: GitHubSyncConfig
+): Promise<GitHubProjectPushResult> {
+  const token = config.token.trim();
+  const owner = config.owner.trim();
+  const repo = config.repo.trim();
+  const branch = (config.branch || "main").trim();
+
+  if (!token || !owner || !repo) {
+    return {
+      success: false,
+      message: "برای ارسال مستقیم کدهای پروژه، توکن گیت‌هاب (PAT)، مالک و نام مخزن را وارد کنید.",
+    };
+  }
+
+  try {
+    const res = await fetch("/api/github/push-project", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, owner, repo, branch }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.success) {
+      return {
+        success: false,
+        message: data?.message || "خطا در ارسال فایل‌های پروژه به گیت‌هاب.",
+      };
+    }
+    return {
+      success: true,
+      message: data.message,
+      commitUrl: data.commitUrl,
+      pagesUrl: data.pagesUrl,
+      filesCount: data.filesCount,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err?.message || "سرور محلی برای ارسال مستقیم فایل‌ها در دسترس نیست (از دستورات git push استفاده کنید).",
     };
   }
 }

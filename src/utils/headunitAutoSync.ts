@@ -130,6 +130,15 @@ export function applyMonitorCssCalibration(profile: HeadunitMonitorProfile) {
   root.style.setProperty("--headunit-scale", String(profile.uiScale));
   root.dataset.headunitEnv = profile.environment;
   root.dataset.headunitOrientation = profile.orientation;
+
+  const ua = typeof navigator !== "undefined" ? (navigator.userAgent || "").toLowerCase() : "";
+  if (
+    ua.includes("android") ||
+    profile.environment === "android-apk" ||
+    profile.environment === "car-headunit"
+  ) {
+    root.dataset.androidPerf = "lite";
+  }
 }
 
 export function runMonitorAutoResetAndMatch(
